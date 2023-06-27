@@ -48,7 +48,7 @@ export interface AsyncActionInput {
     modalRecord?: Record;
     record?: Record;
 
-    [key: string]: any
+    [key: string]: any;
 }
 
 @Injectable({
@@ -81,11 +81,17 @@ export class AsyncActionService {
      * Send action request
      *
      * @param {string} actionName to submit
-     * @param {string} data to send
+     * @param {object} data to send
      * @param {string} presetHandlerKey to use
-     * @returns {object} Observable<Process>
+     * @param {string[]} parentHandlers Parent Handlers
+     * @returns {Observable<Process>} Observable<Process>
      */
-    public run(actionName: string, data: AsyncActionInput, presetHandlerKey: string = null): Observable<Process> {
+    public run(
+        actionName: string,
+        data: AsyncActionInput,
+        presetHandlerKey: string = null,
+        parentHandlers: string[] = []
+    ): Observable<Process> {
         const options = {
             ...data
         };
@@ -106,7 +112,7 @@ export class AsyncActionService {
 
                     if (process.messages) {
                         process.messages.forEach(message => {
-                            if(!!message) {
+                            if(message) {
                                 this.message[handler](message);
                             }
                         });
@@ -124,6 +130,10 @@ export class AsyncActionService {
 
                     const actionHandler: AsyncActionHandler = this.actions[actionHandlerKey];
 
+                    if (parentHandlers.includes(actionHandlerKey)) {
+                        return;
+                    }
+
                     if (!actionHandler) {
                         this.message.addDangerMessageByKey('LBL_MISSING_HANDLER');
                         return;
@@ -133,7 +143,7 @@ export class AsyncActionService {
 
                 }),
                 catchError(err => {
-                    const errorMessage = err?.message ?? ''
+                    const errorMessage = err?.message ?? '';
 
                     if (errorMessage === 'Access Denied.') {
                         this.appStateStore.updateLoading(actionName, false);

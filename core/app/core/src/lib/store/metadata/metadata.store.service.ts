@@ -41,7 +41,8 @@ import {
     SearchMeta,
     SubPanelMeta,
     WidgetMetadata,
-    TabDefinitions
+    TabDefinitions,
+    RecordLogicMap
 } from 'common';
 import {StateStore} from '../state';
 import {AppStateStore} from '../app-state/app-state.store';
@@ -55,6 +56,7 @@ export interface RecordViewMetadata {
     sidebarWidgets?: WidgetMetadata[];
     bottomWidgets?: WidgetMetadata[];
     actions?: Action[];
+    logic?: RecordLogicMap;
     templateMeta?: RecordTemplateMetadata;
     panels?: Panel[];
     summaryTemplates?: SummaryTemplates;
@@ -222,10 +224,10 @@ export class MetadataStore implements StateStore {
      *
      * @param {string} moduleID to fetch
      * @param {string[]} types to fetch
-     * @param useCache
-     * @returns any data
+     * @param {boolean} useCache Use Cache
+     * @returns {any} any data
      */
-    public reloadModuleMetadata(moduleID: string, types: string[], useCache: boolean = true): any {
+    public reloadModuleMetadata(moduleID: string, types: string[], useCache = true): any {
 
         if (!types) {
             types = this.getMetadataTypes();
@@ -243,10 +245,10 @@ export class MetadataStore implements StateStore {
      *
      * @param {string} moduleID to fetch
      * @param {string[]} types to fetch
-     * @param useCache
-     * @returns any data
+     * @param {boolean} useCache Use Cache
+     * @returns {any} any data
      */
-    public load(moduleID: string, types: string[], useCache: boolean = true): any {
+    public load(moduleID: string, types: string[], useCache = true): any {
 
         if (!types) {
             types = this.getMetadataTypes();
@@ -261,6 +263,9 @@ export class MetadataStore implements StateStore {
 
     /**
      * Check if loaded
+     *
+     * @param {string} module Module
+     * @returns {boolean} Is Cached?
      */
     public isCached(module: string): boolean {
         return (cache[module] ?? null) !== null;
@@ -268,13 +273,18 @@ export class MetadataStore implements StateStore {
 
     /**
      * Get empty Metadata
+     *
+     * @returns {object} Metadata
      */
     public getEmpty(): Metadata {
         return deepClone(initialState);
     }
 
     /**
-     * Set pre-loaded navigation and cache
+     * Set preloaded navigation and cache
+     *
+     * @param {string} module Module
+     * @param {object} metadata Metadata
      */
     public set(module: string, metadata: Metadata): void {
         cache[module] = of(metadata).pipe(shareReplay(1));
@@ -286,10 +296,10 @@ export class MetadataStore implements StateStore {
      *
      * @param {string} module to fetch
      * @param {string[]} types to retrieve
-     * @param useCache
+     * @param {boolean} useCache Use Cache
      * @returns {object} Observable<any>
      */
-    public getMetadata(module: string, types: string[] = null, useCache: boolean = true): Observable<Metadata> {
+    public getMetadata(module: string, types: string[] = null, useCache = true): Observable<Metadata> {
 
         if (cache[module] == null || useCache === false) {
             cache[module] = this.fetchMetadata(module, types).pipe(
@@ -320,7 +330,7 @@ export class MetadataStore implements StateStore {
     /**
      * Update the state
      *
-     * @param {string} module
+     * @param {string} module Module
      * @param {object} state to set
      */
     protected updateState(module: string, state: Metadata): void {
@@ -333,7 +343,7 @@ export class MetadataStore implements StateStore {
     /**
      * Update the state
      *
-     * @param {string} module
+     * @param {string} module Module
      * @param {object} state to set
      */
     protected updateAllModulesState(module: string, state: Metadata): void {
@@ -367,9 +377,7 @@ export class MetadataStore implements StateStore {
 
         return this.recordGQL.fetch(this.resourceName, `/api/module-metadata/${module}`, fieldsToRetrieve)
             .pipe(
-                map(({data}) => {
-                    return this.mapMetadata(module, data.moduleMetadata);
-                })
+                map(({data}) => this.mapMetadata(module, data.moduleMetadata))
             );
     }
 
@@ -441,6 +449,7 @@ export class MetadataStore implements StateStore {
         const entries = {
             templateMeta: 'templateMeta',
             actions: 'actions',
+            logic:  'logic',
             panels: 'panels',
             topWidget: 'topWidget',
             sidebarWidgets: 'sidebarWidgets',
