@@ -24,23 +24,33 @@
  * the words "Supercharged by SuiteCRM".
  */
 
+import { cloneDeep, isEmpty, isEqual } from 'lodash-es';
+import { BehaviorSubject, combineLatest, Observable, of, Subscription } from 'rxjs';
+import { catchError, distinctUntilChanged, finalize, map, take, tap } from 'rxjs/operators';
 import {Injectable} from '@angular/core';
-import {BehaviorSubject, combineLatest, Observable, of, Subscription} from 'rxjs';
+import { Params } from '@angular/router';
 import {
     BooleanMap,
     deepClone,
     FieldDefinitionMap,
+    FieldValue,
+    FieldValueMap,
+    FieldLogicMap,
+    FieldMetadata,
     isVoid,
     Record,
+    RecordLogicMap,
     StatisticsMap,
     StatisticsQueryMap,
     SubPanelMeta,
     ViewContext,
     ViewFieldDefinition,
-    ViewMode
+    ViewFieldDefinitionMap,
+    ViewMode,
+    Panel,
+    PanelRow,
 } from 'common';
-import {catchError, distinctUntilChanged, finalize, map, take, tap} from 'rxjs/operators';
-import {RecordViewData, RecordViewModel, RecordViewState} from './record-view.store.model';
+import { RecordLogicMapPerField, RecordViewData, RecordViewModel, RecordViewState } from './record-view.store.model';
 import {NavigationStore} from '../../../../store/navigation/navigation.store';
 import {StateStore} from '../../../../store/state';
 import {RecordSaveGQL} from '../../../../store/record/graphql/api.record.save';
@@ -61,10 +71,12 @@ import {LocalStorageService} from '../../../../services/local-storage/local-stor
 import {SubpanelStoreFactory} from '../../../../containers/subpanel/store/subpanel/subpanel.store.factory';
 import {ViewStore} from '../../../../store/view/view.store';
 import {RecordFetchGQL} from '../../../../store/record/graphql/api.record.get';
-import {Params} from '@angular/router';
 import {StatisticsBatch} from '../../../../store/statistics/statistics-batch.service';
 import {RecordStoreFactory} from '../../../../store/record/record.store.factory';
 import {UserPreferenceStore} from '../../../../store/user-preference/user-preference.store';
+import {PanelLogicManager} from '../../../../components/panel-logic/panel-logic.manager';
+import { RecordLogicManager } from '../../record-logic/record-logic.manager';
+import { RecordLogicContext } from '../../record-logic/record-logic.model';
 
 const initialState: RecordViewState = {
     module: '',
@@ -99,6 +111,8 @@ export class RecordViewStore extends ViewStore implements StateStore {
     subpanels$: Observable<SubpanelStoreMap>;
     viewContext$: Observable<ViewContext>;
     subpanelReload$: Observable<BooleanMap>;
+    panels: Panel[] = [];
+    panels$: Observable<Panel[]>;
 
 
     /**
@@ -119,6 +133,10 @@ export class RecordViewStore extends ViewStore implements StateStore {
     protected subpanelReloadSubject = new BehaviorSubject<BooleanMap>({} as BooleanMap);
     protected subpanelReloadSub: Subscription[] = [];
     protected subs: Subscription[] = [];
+    protected fieldSubs: Subscription[] = [];
+    protected panelsSubject: BehaviorSubject<Panel[]> = new BehaviorSubject(this.panels);
+    protected logicSubs: Subscription[] = [];
+    protected recordLogicPrevValues: FieldValueMap = {};
 
     constructor(
         protected recordFetchGQL: RecordFetchGQL,
@@ -134,10 +152,14 @@ export class RecordViewStore extends ViewStore implements StateStore {
         protected recordManager: RecordManager,
         protected statisticsBatch: StatisticsBatch,
         protected recordStoreFactory: RecordStoreFactory,
-        protected preferences: UserPreferenceStore
+        protected preferences: UserPreferenceStore,
+        protected panelLogicManager: PanelLogicManager,
+        protected recordLogicManager: RecordLogicManager,
     ) {
 
         super(appStateStore, languageStore, navigationStore, moduleNavigation, metadataStore);
+
+        this.panels$ = this.panelsSubject.asObservable();
 
         this.recordStore = recordStoreFactory.create(this.getViewFieldsObservable());
 
@@ -170,9 +192,8 @@ export class RecordViewStore extends ViewStore implements StateStore {
         this.subpanels$ = this.subpanelsState.asObservable();
 
 
-        this.viewContext$ = this.record$.pipe(map(() => {
-            return this.getViewContext();
-        }));
+        this.viewContext$ = this.record$.pipe(map(() => this.getViewContext()));
+        this.initPanels();
     }
 
     get widgets(): boolean {
@@ -276,6 +297,17 @@ export class RecordViewStore extends ViewStore implements StateStore {
 
         this.calculateShowWidgets();
 
+        this.recordLogicPrevValues = {};
+        this.subs.push(
+            this.stagingRecord$.subscribe(stagingRecord => {
+                if (!stagingRecord || !stagingRecord.fields) {
+                    return;
+                }
+                this.recordLogicPrevValues = {};
+                this.initializeRecordLogic(stagingRecord);
+            })
+        );
+
         return this.load().pipe(
             tap(() => {
                 this.showTopWidget = true;
@@ -293,6 +325,10 @@ export class RecordViewStore extends ViewStore implements StateStore {
         this.clearSubpanels();
         this.subpanelsState.unsubscribe();
         this.updateState(deepClone(initialState));
+        this.subs = this.safeUnsubscription(this.subs);
+        this.fieldSubs = this.safeUnsubscription(this.fieldSubs);
+        this.logicSubs = this.safeUnsubscription(this.logicSubs);
+        this.recordLogicPrevValues = {};
     }
 
     /**
@@ -364,6 +400,8 @@ export class RecordViewStore extends ViewStore implements StateStore {
             ...this.internalState,
             loading: true
         });
+
+        this.recordLogicPrevValues = {};
 
         return this.recordStore.retrieveRecord(
             this.internalState.module,
@@ -522,6 +560,70 @@ export class RecordViewStore extends ViewStore implements StateStore {
         });
     }
 
+    protected initPanels(): void {
+        const panelSub = combineLatest([
+            this.metadataStore.recordViewMetadata$,
+            this.stagingRecord$,
+            this.languageStore.vm$,
+        ]).subscribe(([meta, record, languages]) => {
+            const panels = [];
+            const module = (record && record.module) || '';
+
+            this.safeUnsubscription(this.fieldSubs);
+            meta.panels.forEach(panelDefinition => {
+                const label = (panelDefinition.label)
+                    ? panelDefinition.label.toUpperCase()
+                    : this.languageStore.getFieldLabel(panelDefinition.key.toUpperCase(), module, languages);
+                const panel = { label, key: panelDefinition.key, rows: [] } as Panel;
+
+                const tabDef = meta.templateMeta.tabDefs[panelDefinition.key.toUpperCase()] ?? null;
+                if (tabDef) {
+                    panel.meta = tabDef;
+                }
+
+                panelDefinition.rows.forEach(rowDefinition => {
+                    const row = { cols: [] } as PanelRow;
+                    rowDefinition.cols.forEach(cellDefinition => {
+                        row.cols.push({ ...cellDefinition });
+                    });
+                    panel.rows.push(row);
+                });
+
+                panel.displayState = new BehaviorSubject(tabDef?.display ?? true);
+                panel.display$ = panel.displayState.asObservable();
+
+                panels.push(panel);
+
+                if (isEmpty(record?.fields) || isEmpty(tabDef?.displayLogic)) {
+                    return;
+                }
+
+                Object.values(tabDef.displayLogic).forEach((logicDef) => {
+                    if (isEmpty(logicDef?.params?.fieldDependencies)) {
+                        return;
+                    }
+
+                    logicDef.params.fieldDependencies.forEach(fieldKey => {
+                        const field = record.fields[fieldKey] || null;
+                        if (isEmpty(field)) {
+                            return;
+                        }
+
+                        this.fieldSubs.push(
+                            field.valueChanges$.subscribe(() => {
+                                this.panelLogicManager.runLogic(logicDef.key, field, panel, record, this.getMode());
+                            }),
+                        );
+                    });
+                });
+            });
+            this.panelsSubject.next(this.panels = panels);
+            return panels;
+        });
+
+        this.subs.push(panelSub);
+    }
+
     protected clearSubpanels(): void {
         if (this.subpanels) {
             Object.keys(this.subpanels).forEach((key: string) => {
@@ -587,13 +689,42 @@ export class RecordViewStore extends ViewStore implements StateStore {
      */
     protected getViewFieldsObservable(): Observable<ViewFieldDefinition[]> {
         return this.metadataStore.recordViewMetadata$.pipe(map((recordMetadata: RecordViewMetadata) => {
-            const fields: ViewFieldDefinition[] = [];
+            const fieldsMap: ViewFieldDefinitionMap = {};
             recordMetadata.panels.forEach(panel => {
                 panel.rows.forEach(row => {
                     row.cols.forEach(col => {
-                        fields.push(col);
+                        const fieldName = col.name ?? col.fieldDefinition.name ?? '';
+                        fieldsMap[fieldName] = col;
                     });
                 });
+            });
+
+            Object.keys(recordMetadata.vardefs).forEach(fieldKey => {
+                const vardef = recordMetadata.vardefs[fieldKey] ?? null;
+                if (!vardef || isEmpty(vardef)) {
+                    return;
+                }
+
+                // already defined. skip
+                if (fieldsMap[fieldKey]) {
+                    return;
+                }
+
+                fieldsMap[fieldKey] = {
+                    name: fieldKey,
+                    vardefBased: true,
+                    label: vardef.vname ?? '',
+                    type: vardef.type ?? '',
+                    display: vardef.display ?? '',
+                    fieldDefinition: vardef,
+                    metadata: vardef.metadata ?? {} as FieldMetadata,
+                    logic: vardef.logic ?? {} as FieldLogicMap
+                } as ViewFieldDefinition;
+            });
+
+            const fields: ViewFieldDefinition[] = [];
+            Object.keys(fieldsMap).forEach(fieldKey => {
+                fields.push(fieldsMap[fieldKey]);
             });
 
             return fields;
@@ -602,8 +733,10 @@ export class RecordViewStore extends ViewStore implements StateStore {
 
     /**
      * Build ui user preference key
-     * @param storageKey
+     *
+     * @param {string} storageKey Storage Key
      * @protected
+     * @returns {string} Preference Key
      */
     protected getPreferenceKey(storageKey: string): string {
         return 'recordview-' + storageKey;
@@ -611,9 +744,10 @@ export class RecordViewStore extends ViewStore implements StateStore {
 
     /**
      * Save ui user preference
-     * @param module
-     * @param storageKey
-     * @param value
+     *
+     * @param {string} module Module
+     * @param {string} storageKey Storage Key
+     * @param {any} value Value
      * @protected
      */
     protected savePreference(module: string, storageKey: string, value: any): void {
@@ -622,9 +756,11 @@ export class RecordViewStore extends ViewStore implements StateStore {
 
     /**
      * Load ui user preference
-     * @param module
-     * @param storageKey
+     *
+     * @param {string} module Module
+     * @param {string} storageKey Storage Key
      * @protected
+     * @returns {any} User Preference
      */
     protected loadPreference(module: string, storageKey: string): any {
         return this.preferences.getUi(module, this.getPreferenceKey(storageKey));
@@ -678,4 +814,104 @@ export class RecordViewStore extends ViewStore implements StateStore {
         });
     }
 
+    private initializeRecordLogic(stagingRecord: Record): void {
+        this.logicSubs = this.safeUnsubscription(this.logicSubs);
+
+        const recordViewMetadata = this.getRecordViewMetadata();
+        if (isEmpty(recordViewMetadata.logic)) {
+            return;
+        }
+
+        const recordLogicsPerFields = this.buildLogicConfigMap(recordViewMetadata.logic);
+        if (isEmpty(recordLogicsPerFields)) {
+            return;
+        }
+
+        this.initializeLogicSubscriptions(stagingRecord, recordViewMetadata.logic);
+    }
+
+    private initializeLogicSubscriptions(stagingRecord: Record, recordLogicMap: RecordLogicMap): void {
+        Object.keys(recordLogicMap).forEach((recordLogicKey) => {
+            const recordLogic = recordLogicMap[recordLogicKey];
+            const dependentFields = recordLogic?.params?.fieldDependencies ?? [];
+
+            if (isEmpty(dependentFields)) {
+                return;
+            }
+
+            const dependentFieldsValueChanges$ = [];
+            dependentFields.forEach(fieldName => {
+                const field = stagingRecord.fields[fieldName];
+                if (isEmpty(field)) {
+                    return;
+                }
+
+                dependentFieldsValueChanges$.push(field.valueChanges$);
+            });
+
+            this.logicSubs.push(
+                combineLatest(dependentFieldsValueChanges$).subscribe((valueChanges: FieldValue[]) => {
+                    this.recordLogicPrevValues[recordLogicKey] = this.recordLogicPrevValues[recordLogicKey] ?? {};
+                    const recordLogicPrevValues = this.recordLogicPrevValues[recordLogicKey];
+
+                    let isSame = true;
+                    dependentFields.forEach((fieldName, index) => {
+                        const prevValue: FieldValue = recordLogicPrevValues[fieldName] ?? {};
+                        const currValue: FieldValue = cloneDeep({
+                            value: valueChanges[index].value,
+                            valueList: valueChanges[index].valueList,
+                            valueObject: valueChanges[index].valueObject
+                        });
+                        isSame = isSame && isEqual(prevValue, currValue);
+
+                        recordLogicPrevValues[fieldName] = currValue;
+                    });
+
+                    if (isSame === true) {
+                        return;
+                    }
+
+                    const recordLogicContext: RecordLogicContext = {
+                        mode: this.getMode(),
+                        record: stagingRecord,
+                        subpanels$: this.subpanels$,
+                        reload: () => this.load(false),
+                    };
+
+                    this.recordLogicManager.runLogic({
+                        ...recordLogicContext,
+                        logicEntries: [recordLogic],
+                    });
+                }),
+            );
+        });
+    }
+
+    private buildLogicConfigMap(recordLogicMap: RecordLogicMap): RecordLogicMapPerField {
+        const logicConfigsPerField: RecordLogicMapPerField = {};
+
+        Object.entries(recordLogicMap).forEach(([recordLogicName, recordLogic]) => {
+            const dependentFields = recordLogic?.params?.fieldDependencies ?? [];
+
+            dependentFields.forEach(fieldName => {
+                logicConfigsPerField[fieldName] = logicConfigsPerField[fieldName] ?? {};
+                logicConfigsPerField[fieldName][recordLogicName] = recordLogic;
+            });
+        });
+
+        return logicConfigsPerField;
+    }
+
+    private safeUnsubscription(subscriptionArray: Subscription[]): Subscription[] {
+        subscriptionArray.forEach(sub => {
+            if (sub.closed) {
+                return;
+            }
+
+            sub.unsubscribe();
+        });
+        subscriptionArray = [];
+
+        return subscriptionArray;
+    }
 }

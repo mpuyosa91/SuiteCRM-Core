@@ -45,6 +45,8 @@ import {MessageService} from '../../../../services/message/message.service';
 import {Record, ViewMode} from 'common';
 import {RecordStoreFactory} from '../../../../store/record/record.store.factory';
 import {UserPreferenceStore} from '../../../../store/user-preference/user-preference.store';
+import {PanelLogicManager} from '../../../../components/panel-logic/panel-logic.manager';
+import {RecordLogicManager} from '../../../record/record-logic/record-logic.manager';
 
 @Injectable()
 export class CreateViewStore extends RecordViewStore {
@@ -64,7 +66,9 @@ export class CreateViewStore extends RecordViewStore {
         protected statisticsBatch: StatisticsBatch,
         protected auth: AuthService,
         protected recordStoreFactory: RecordStoreFactory,
-        protected preferences: UserPreferenceStore
+        protected preferences: UserPreferenceStore,
+        protected panelLogicManager: PanelLogicManager,
+        protected recordLogicManager: RecordLogicManager,
     ) {
         super(
             recordFetchGQL,
@@ -80,7 +84,9 @@ export class CreateViewStore extends RecordViewStore {
             recordManager,
             statisticsBatch,
             recordStoreFactory,
-            preferences
+            preferences,
+            panelLogicManager,
+            recordLogicManager,
         );
     }
 
@@ -177,6 +183,7 @@ export class CreateViewStore extends RecordViewStore {
                 tap((data: Record) => {
                     data.id = '';
                     data.attributes.id = '';
+                    // eslint-disable-next-line camelcase,@typescript-eslint/camelcase
                     data.attributes.date_entered = '';
                     this.recordManager.injectParamFields(this.params, data, this.getVardefs());
                     this.recordStore.setRecord(data);

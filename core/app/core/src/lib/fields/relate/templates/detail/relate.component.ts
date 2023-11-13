@@ -24,7 +24,7 @@
  * the words "Supercharged by SuiteCRM".
  */
 
-import {Component} from '@angular/core';
+import {Component, OnInit} from '@angular/core';
 import {BaseFieldComponent} from '../../../base/base-field.component';
 import {DataTypeFormatter} from '../../../../services/formatters/data-type.formatter.service';
 import {FieldLogicManager} from '../../../field-logic/field-logic.manager';
@@ -35,7 +35,8 @@ import {FieldLogicDisplayManager} from '../../../field-logic-display/field-logic
     templateUrl: './relate.component.html',
     styleUrls: []
 })
-export class RelateDetailFieldComponent extends BaseFieldComponent {
+export class RelateDetailFieldComponent extends BaseFieldComponent implements OnInit {
+    valueLabel = '';
 
     constructor(
         protected typeFormatter: DataTypeFormatter,
@@ -43,5 +44,16 @@ export class RelateDetailFieldComponent extends BaseFieldComponent {
         protected logicDisplay: FieldLogicDisplayManager
     ) {
         super(typeFormatter, logic, logicDisplay);
+    }
+
+    ngOnInit(): void {
+        super.ngOnInit();
+
+        if (this.field.valueChanges$) {
+            this.subs.push(
+                this.field.valueChanges$
+                    .subscribe(({valueObject}) => this.valueLabel = valueObject.name ?? valueObject.user_name ?? '')
+            );
+        }
     }
 }

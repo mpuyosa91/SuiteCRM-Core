@@ -55,12 +55,12 @@ export class FieldLayoutComponent extends BaseFieldGridComponent {
         'd-flex': true,
         'flex-column': true,
         'justify-content-between': true
-    } as { [key:string]: boolean };
+    } as { [key: string]: boolean };
 
     baseRowClass = {
         'form-row': true,
         'align-items-stretch': true
-    } as { [key:string]: boolean };
+    } as { [key: string]: boolean };
 
     constructor(protected breakpointObserver: BreakpointObserver) {
         super(breakpointObserver);
@@ -118,11 +118,6 @@ export class FieldLayoutComponent extends BaseFieldGridComponent {
                     } as FieldGridRow;
                 }
             });
-
-            if (row.cols.length < this.colNumber) {
-                this.fillRow(row);
-            }
-
 
             grid.push(row);
         });

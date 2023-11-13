@@ -24,7 +24,7 @@
  * the words "Supercharged by SuiteCRM".
  */
 
-import {Record, ViewMode} from 'common';
+import { Record, RecordLogicMap, ViewMode } from 'common';
 import {AppData} from '../../../../store/view/view.store';
 import {Metadata} from '../../../../store/metadata/metadata.store.service';
 
@@ -52,4 +52,8 @@ export interface RecordViewState {
     showSubpanels: boolean;
     mode: ViewMode;
     params: { [key: string]: string };
+}
+
+export interface RecordLogicMapPerField {
+    [fieldName: string]: RecordLogicMap;
 }
