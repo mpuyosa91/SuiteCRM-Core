@@ -63,7 +63,7 @@ import { Process } from '../../../services/process/process.service';
 import { ConfirmationModalService } from '../../../services/modals/confirmation-modal.service';
 import { BaseRecordActionsAdapter } from '../../../services/actions/base-record-action.adapter';
 import { SelectModalService } from '../../../services/modals/select-modal.service';
-
+import { RecordActionDisplayTypeLogic } from '../action-logic/display-type/display-type.logic';
 @Injectable()
 export class RecordActionsAdapter extends BaseRecordActionsAdapter<RecordActionData> {
 
@@ -98,7 +98,8 @@ export class RecordActionsAdapter extends BaseRecordActionsAdapter<RecordActionD
         protected asyncActionService: AsyncActionService,
         protected message: MessageService,
         protected confirmation: ConfirmationModalService,
-        protected selectModalService: SelectModalService
+        protected selectModalService: SelectModalService,
+        protected displayTypeLogic: RecordActionDisplayTypeLogic,
     ) {
         super(
             actionManager,
@@ -292,4 +293,20 @@ export class RecordActionsAdapter extends BaseRecordActionsAdapter<RecordActionD
         return requiredForSubmitObj;
     }
 
+
+    protected shouldDisplay(actionHandler: ActionHandler<RecordActionData>, data: RecordActionData): boolean {
+
+        const displayLogic: LogicDefinitions | null = data?.action?.displayLogic ?? null;
+        let toDisplay = true;
+
+        if (displayLogic && Object.keys(displayLogic).length) {
+            toDisplay = this.displayTypeLogic.runAll(displayLogic, data);
+        }
+
+        if (!toDisplay) {
+            return false;
+        }
+
+        return actionHandler && actionHandler.shouldDisplay(data);
+    }
 }
