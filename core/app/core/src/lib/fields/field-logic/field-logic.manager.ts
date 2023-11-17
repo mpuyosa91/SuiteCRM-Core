@@ -38,6 +38,7 @@ import {UpdateValueAction} from './update-value/update-value.action';
 import {UpdateValueBackendAction} from './update-value-backend/update-value-backend.action';
 import {DisplayTypeBackendAction} from './display-type-backend/display-type-backend.action';
 import {ConditionalOptionsAction} from './conditional-options/conditional-options.action';
+import {UpdateFieldAction} from './update-field/update-field.action';
 
 @Injectable({
     providedIn: 'root'
@@ -64,6 +65,7 @@ export class FieldLogicManager extends BaseActionManager<FieldLogicActionData> {
         updateValueBackend: UpdateValueBackendAction,
         dislayTypeBackend: DisplayTypeBackendAction,
         conditionalOptionsAction: ConditionalOptionsAction,
+        updateFieldAction: UpdateFieldAction,
     ) {
         super();
         displayType.modes.forEach(mode => this.actions[mode][displayType.key] = displayType);
@@ -76,6 +78,7 @@ export class FieldLogicManager extends BaseActionManager<FieldLogicActionData> {
         updateValueBackend.modes.forEach(mode => this.actions[mode][updateValueBackend.key] = updateValueBackend);
         dislayTypeBackend.modes.forEach(mode => this.actions[mode][dislayTypeBackend.key] = dislayTypeBackend);
         conditionalOptionsAction.modes.forEach(mode => this.actions[mode][conditionalOptionsAction.key] = conditionalOptionsAction);
+        updateFieldAction.modes.forEach(mode => this.actions[mode][updateFieldAction.key] = updateFieldAction);
     }
 
     /**
