@@ -32,9 +32,12 @@ import { Params } from '@angular/router';
 import {
     BooleanMap,
     deepClone,
+    Field,
     FieldDefinitionMap,
     FieldValue,
     FieldValueMap,
+    FieldLogicMap,
+    FieldMetadata,
     isVoid,
     Record,
     RecordLogicMap,
@@ -43,6 +46,7 @@ import {
     SubPanelMeta,
     ViewContext,
     ViewFieldDefinition,
+    ViewFieldDefinitionMap,
     ViewMode,
     Panel,
     PanelRow,
@@ -429,6 +433,58 @@ export class RecordViewStore extends ViewStore implements StateStore {
         return templates[this.getMode()] || '';
     }
 
+    initValidators(record: Record): void {
+        if(!record || !Object.keys(record?.fields).length) {
+            return;
+        }
+
+        Object.keys(record.fields).forEach(fieldName => {
+            const field = record.fields[fieldName];
+            const formControl = field?.formControl ?? null;
+            if (!formControl) {
+                return;
+            }
+
+            this.resetValidators(field);
+
+            const validators = field?.validators ?? [];
+            const asyncValidators = field?.asyncValidators ?? [];
+
+            if (field?.formControl && validators.length) {
+                field.formControl.setValidators(validators);
+            }
+            if (field?.formControl && asyncValidators.length) {
+                field.formControl.setAsyncValidators(asyncValidators);
+            }
+        });
+
+    }
+
+    resetValidators(field: Field): void {
+        if (!field?.formControl) {
+            return;
+        }
+
+        field.formControl.clearValidators();
+        field.formControl.clearAsyncValidators();
+    }
+
+    resetValidatorsForAllFields(record: Record): void {
+        if(!record || !record?.fields?.length) {
+            return ;
+        }
+        Object.keys(record.fields).forEach(fieldName => {
+            const field = record.fields[fieldName];
+            const formControl = field?.formControl ?? null;
+
+            if (!formControl) {
+                return;
+            }
+
+            this.resetValidators(field);
+        });
+    }
+
     /**
      * Parse query params
      *
@@ -686,16 +742,40 @@ export class RecordViewStore extends ViewStore implements StateStore {
      */
     protected getViewFieldsObservable(): Observable<ViewFieldDefinition[]> {
         return this.metadataStore.recordViewMetadata$.pipe(map((recordMetadata: RecordViewMetadata) => {
-            const fields: ViewFieldDefinition[] = [];
+            const fieldsMap: ViewFieldDefinitionMap = {};
             recordMetadata.panels.forEach(panel => {
                 panel.rows.forEach(row => {
                     row.cols.forEach(col => {
-                        fields.push(col);
+                        const fieldName = col.name ?? col.fieldDefinition.name ?? '';
+                        fieldsMap[fieldName] = col;
                     });
                 });
             });
 
-            return fields;
+            Object.keys(recordMetadata.vardefs).forEach(fieldKey => {
+                const vardef = recordMetadata.vardefs[fieldKey] ?? null;
+                if (!vardef || isEmpty(vardef)) {
+                    return;
+                }
+
+                // already defined. skip
+                if (fieldsMap[fieldKey]) {
+                    return;
+                }
+
+                fieldsMap[fieldKey] = {
+                    name: fieldKey,
+                    vardefBased: true,
+                    label: vardef.vname ?? '',
+                    type: vardef.type ?? '',
+                    display: vardef.display ?? '',
+                    fieldDefinition: vardef,
+                    metadata: vardef.metadata ?? {} as FieldMetadata,
+                    logic: vardef.logic ?? {} as FieldLogicMap
+                } as ViewFieldDefinition;
+            });
+
+            return Object.values(fieldsMap);
         }));
     }
 
@@ -732,54 +812,6 @@ export class RecordViewStore extends ViewStore implements StateStore {
      */
     protected loadPreference(module: string, storageKey: string): any {
         return this.preferences.getUi(module, this.getPreferenceKey(storageKey));
-    }
-
-    initValidators(record: Record): void {
-        if(!record || !Object.keys(record?.fields).length) {
-            return;
-        }
-
-        Object.keys(record.fields).forEach(fieldName => {
-            const field = record.fields[fieldName];
-            const formControl = field?.formControl ?? null;
-            if (!formControl) {
-                return;
-            }
-
-            this.resetValidators(field);
-
-            const validators = field?.validators ?? [];
-            const asyncValidators = field?.asyncValidators ?? [];
-
-            if (validators.length) {
-                field?.formControl?.setValidators(validators);
-            }
-            if (asyncValidators.length) {
-                field?.formControl?.setAsyncValidators(asyncValidators);
-            }
-        });
-
-    }
-
-    resetValidators(field) {
-        field?.formControl?.clearValidators();
-        field?.formControl?.clearAsyncValidators();
-    }
-
-    resetValidatorsForAllFields(record) {
-        if(!record || !record?.fields?.length) {
-            return ;
-        }
-        Object.keys(record.fields).forEach(fieldName => {
-            const field = record.fields[fieldName];
-            const formControl = field?.formControl ?? null;
-
-            if (!formControl) {
-                return;
-            }
-
-            this.resetValidators(field);
-        });
     }
 
     private initializeRecordLogic(stagingRecord: Record): void {
