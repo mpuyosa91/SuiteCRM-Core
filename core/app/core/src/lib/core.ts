@@ -361,6 +361,8 @@ export * from './fields/enum/templates/edit/enum.component';
 export * from './fields/enum/templates/edit/enum.module';
 export * from './fields/field-logic/field-logic.action';
 export * from './fields/field-logic/field-logic.manager';
+export * from './fields/field-logic/actionable-field-logic/actionable-field-logic.action';
+export * from './fields/field-logic/conditional-options/conditional-options.action';
 export * from './fields/field-logic/currency-conversion/update-base-currency.action';
 export * from './fields/field-logic/currency-conversion/update-currency.action';
 export * from './fields/field-logic/display-type/display-type.action';
