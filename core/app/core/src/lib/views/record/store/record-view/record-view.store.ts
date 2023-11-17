@@ -24,15 +24,20 @@
  * the words "Supercharged by SuiteCRM".
  */
 
-import {isEmpty} from 'lodash-es';
+import { cloneDeep, isEmpty, isEqual } from 'lodash-es';
+import { BehaviorSubject, combineLatest, Observable, of, Subscription } from 'rxjs';
+import { catchError, distinctUntilChanged, finalize, map, take, tap } from 'rxjs/operators';
 import {Injectable} from '@angular/core';
-import {BehaviorSubject, combineLatest, Observable, of, Subscription} from 'rxjs';
+import { Params } from '@angular/router';
 import {
     BooleanMap,
     deepClone,
     FieldDefinitionMap,
+    FieldValue,
+    FieldValueMap,
     isVoid,
     Record,
+    RecordLogicMap,
     StatisticsMap,
     StatisticsQueryMap,
     SubPanelMeta,
@@ -42,8 +47,7 @@ import {
     Panel,
     PanelRow,
 } from 'common';
-import {catchError, distinctUntilChanged, finalize, map, take, tap} from 'rxjs/operators';
-import {RecordViewData, RecordViewModel, RecordViewState} from './record-view.store.model';
+import { RecordLogicMapPerField, RecordViewData, RecordViewModel, RecordViewState } from './record-view.store.model';
 import {NavigationStore} from '../../../../store/navigation/navigation.store';
 import {StateStore} from '../../../../store/state';
 import {RecordSaveGQL} from '../../../../store/record/graphql/api.record.save';
@@ -64,11 +68,12 @@ import {LocalStorageService} from '../../../../services/local-storage/local-stor
 import {SubpanelStoreFactory} from '../../../../containers/subpanel/store/subpanel/subpanel.store.factory';
 import {ViewStore} from '../../../../store/view/view.store';
 import {RecordFetchGQL} from '../../../../store/record/graphql/api.record.get';
-import {Params} from '@angular/router';
 import {StatisticsBatch} from '../../../../store/statistics/statistics-batch.service';
 import {RecordStoreFactory} from '../../../../store/record/record.store.factory';
 import {UserPreferenceStore} from '../../../../store/user-preference/user-preference.store';
 import {PanelLogicManager} from '../../../../components/panel-logic/panel-logic.manager';
+import { RecordLogicManager } from '../../record-logic/record-logic.manager';
+import { RecordLogicContext } from '../../record-logic/record-logic.model';
 
 const initialState: RecordViewState = {
     module: '',
@@ -127,6 +132,8 @@ export class RecordViewStore extends ViewStore implements StateStore {
     protected subs: Subscription[] = [];
     protected fieldSubs: Subscription[] = [];
     protected panelsSubject: BehaviorSubject<Panel[]> = new BehaviorSubject(this.panels);
+    protected logicSubs: Subscription[] = [];
+    protected recordLogicPrevValues: FieldValueMap = {};
 
     constructor(
         protected recordFetchGQL: RecordFetchGQL,
@@ -144,6 +151,7 @@ export class RecordViewStore extends ViewStore implements StateStore {
         protected recordStoreFactory: RecordStoreFactory,
         protected preferences: UserPreferenceStore,
         protected panelLogicManager: PanelLogicManager,
+        protected recordLogicManager: RecordLogicManager,
     ) {
 
         super(appStateStore, languageStore, navigationStore, moduleNavigation, metadataStore);
@@ -286,6 +294,17 @@ export class RecordViewStore extends ViewStore implements StateStore {
 
         this.calculateShowWidgets();
 
+        this.recordLogicPrevValues = {};
+        this.subs.push(
+            this.stagingRecord$.subscribe(stagingRecord => {
+                if (!stagingRecord || !stagingRecord.fields) {
+                    return;
+                }
+                this.recordLogicPrevValues = {};
+                this.initializeRecordLogic(stagingRecord);
+            })
+        );
+
         return this.load().pipe(
             tap(() => {
                 this.showTopWidget = true;
@@ -305,6 +324,8 @@ export class RecordViewStore extends ViewStore implements StateStore {
         this.updateState(deepClone(initialState));
         this.subs = this.safeUnsubscription(this.subs);
         this.fieldSubs = this.safeUnsubscription(this.fieldSubs);
+        this.logicSubs = this.safeUnsubscription(this.logicSubs);
+        this.recordLogicPrevValues = {};
     }
 
     /**
@@ -376,6 +397,8 @@ export class RecordViewStore extends ViewStore implements StateStore {
             ...this.internalState,
             loading: true
         });
+
+        this.recordLogicPrevValues = {};
 
         return this.recordStore.retrieveRecord(
             this.internalState.module,
@@ -757,6 +780,94 @@ export class RecordViewStore extends ViewStore implements StateStore {
 
             this.resetValidators(field);
         });
+    }
+
+    private initializeRecordLogic(stagingRecord: Record): void {
+        this.logicSubs = this.safeUnsubscription(this.logicSubs);
+
+        const recordViewMetadata = this.getRecordViewMetadata();
+        if (isEmpty(recordViewMetadata.logic)) {
+            return;
+        }
+
+        const recordLogicsPerFields = this.buildLogicConfigMap(recordViewMetadata.logic);
+        if (isEmpty(recordLogicsPerFields)) {
+            return;
+        }
+
+        this.initializeLogicSubscriptions(stagingRecord, recordViewMetadata.logic);
+    }
+
+    private initializeLogicSubscriptions(stagingRecord: Record, recordLogicMap: RecordLogicMap): void {
+        Object.keys(recordLogicMap).forEach((recordLogicKey) => {
+            const recordLogic = recordLogicMap[recordLogicKey];
+            const dependentFields = recordLogic?.params?.fieldDependencies ?? [];
+
+            if (isEmpty(dependentFields)) {
+                return;
+            }
+
+            const dependentFieldsValueChanges$ = [];
+            dependentFields.forEach(fieldName => {
+                const field = stagingRecord.fields[fieldName];
+                if (isEmpty(field)) {
+                    return;
+                }
+
+                dependentFieldsValueChanges$.push(field.valueChanges$);
+            });
+
+            this.logicSubs.push(
+                combineLatest(dependentFieldsValueChanges$).subscribe((valueChanges: FieldValue[]) => {
+                    this.recordLogicPrevValues[recordLogicKey] = this.recordLogicPrevValues[recordLogicKey] ?? {};
+                    const recordLogicPrevValues = this.recordLogicPrevValues[recordLogicKey];
+
+                    let isSame = true;
+                    dependentFields.forEach((fieldName, index) => {
+                        const prevValue: FieldValue = recordLogicPrevValues[fieldName] ?? {};
+                        const currValue: FieldValue = cloneDeep({
+                            value: valueChanges[index].value,
+                            valueList: valueChanges[index].valueList,
+                            valueObject: valueChanges[index].valueObject
+                        });
+                        isSame = isSame && isEqual(prevValue, currValue);
+
+                        recordLogicPrevValues[fieldName] = currValue;
+                    });
+
+                    if (isSame === true) {
+                        return;
+                    }
+
+                    const recordLogicContext: RecordLogicContext = {
+                        mode: this.getMode(),
+                        record: stagingRecord,
+                        subpanels$: this.subpanels$,
+                        reload: () => this.load(false),
+                    };
+
+                    this.recordLogicManager.runLogic({
+                        ...recordLogicContext,
+                        logicEntries: [recordLogic],
+                    });
+                }),
+            );
+        });
+    }
+
+    private buildLogicConfigMap(recordLogicMap: RecordLogicMap): RecordLogicMapPerField {
+        const logicConfigsPerField: RecordLogicMapPerField = {};
+
+        Object.entries(recordLogicMap).forEach(([recordLogicName, recordLogic]) => {
+            const dependentFields = recordLogic?.params?.fieldDependencies ?? [];
+
+            dependentFields.forEach(fieldName => {
+                logicConfigsPerField[fieldName] = logicConfigsPerField[fieldName] ?? {};
+                logicConfigsPerField[fieldName][recordLogicName] = recordLogic;
+            });
+        });
+
+        return logicConfigsPerField;
     }
 
     private safeUnsubscription(subscriptionArray: Subscription[]): Subscription[] {
